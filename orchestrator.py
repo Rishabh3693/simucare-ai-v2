@@ -1,3 +1,4 @@
+from langgraph import graph
 from langgraph.graph import StateGraph, END
 from state import AthleteState
 
@@ -92,7 +93,8 @@ def insight_node(state: AthleteState):
         load=state["training_load_analysis"],
         recovery=state["recovery_analysis"],
         risk=state["injury_risk_analysis"],
-        knowledge=state.get("knowledge_context")
+        knowledge=state.get("knowledge_context"),
+        graph_context=state.get("graph_context") 
     )
     return {
         "insight_report": output,
@@ -109,6 +111,7 @@ def build_orchestrator():
     graph.add_node("recovery", recovery_node)
     graph.add_node("injury_risk", injury_risk_node)
     graph.add_node("knowledge", knowledge_node)
+    graph.add_node("graph_rag", graph_rag_node)
     graph.add_node("insight", insight_node)
 
     # Define flow
@@ -125,7 +128,8 @@ def build_orchestrator():
     graph.add_edge("injury_risk", "knowledge")
 
     # Final synthesis
-    graph.add_edge("knowledge", "insight")
+    graph.add_edge("knowledge", "graph_rag")
+    graph.add_edge("graph_rag", "insight")
     graph.add_edge("insight", END)
 
     return graph.compile()
