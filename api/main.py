@@ -1,17 +1,30 @@
 from fastapi import FastAPI, HTTPException
-from api.schemas import InsightResponse, ChatRequest, ChatResponse
+from api.schemas import (
+    InsightResponse,
+    ChatRequest,
+    ChatResponse,
+    SimulationStepResponse,
+)
+
 from data_access import load_athlete_day
 from orchestrator import build_orchestrator
 from agents.coach_chat import coach_chat_agent
 import state
+from simulation.orchestrator import run_simulation_step
 from summary.persist_daily_output import persist_daily_output
-
+from fastapi.middleware.cors import CORSMiddleware
 app = FastAPI(
     title="SimuCare API v2",
     description="AI-driven athlete insight and coaching system",
     version="2.0.3"
 )
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"], # Allows all origins
+    allow_credentials=True,
+    allow_methods=["*"], # Allows all methods (GET, POST, PUT, DELETE, etc.)
+    allow_headers=["*"], # Allows all headers
+)
 graph = build_orchestrator()
 
 @app.get("/user/{user_id}/daily-insight", response_model=InsightResponse)
@@ -140,3 +153,11 @@ def monthly_summary(user_id: str, end_day: str):
         **monthly_context,
         **monthly_insight
     }
+
+
+@app.get("/user/{user_id}/simulate-day", response_model=SimulationStepResponse)
+def simulate_day(user_id: str, day: str):
+    try:
+        return run_simulation_step(user_id, day)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
