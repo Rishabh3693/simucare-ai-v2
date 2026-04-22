@@ -2,7 +2,7 @@ from langgraph import graph
 from langgraph.graph import StateGraph, END
 from state import AthleteState
 
-from graph_rag import GraphRAG
+from agents.graph_rag import GraphRAG
 
 graph_rag = GraphRAG(
     uri="bolt://localhost:7687",
@@ -75,14 +75,19 @@ def graph_rag_node(state: AthleteState):
         **state.get("injury_risk_analysis", {})
     }
 
+    print("STRUCTURED DATA:", structured_data)  # 👈 Debug
+
     # Step 1: Extract relevant metrics
     active_metrics = graph_rag.extract_active_metrics(structured_data)
+    print("ACTIVE METRICS:", active_metrics)    # 👈 Debug
 
     # Step 2: Query Neo4j
     graph_results = graph_rag.query_graph(active_metrics)
+    print("GRAPH RESULTS:", graph_results)      # 👈 Debug
 
     # Step 3: Build context
     graph_context = graph_rag.build_context(graph_results)
+    print("GRAPH CONTEXT:", graph_context)      # 👈 Debug
 
     return {
         "graph_context": graph_context

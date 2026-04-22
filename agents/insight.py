@@ -1,6 +1,12 @@
 from typing import Dict, Any
 from langchain.schema import SystemMessage, HumanMessage
+from .graph_rag import GraphRAG
 
+graph_rag = GraphRAG(
+    uri="bolt://localhost:7687",
+    user="neo4j",
+    password="Simucare"
+)
 from dotenv import load_dotenv
 load_dotenv()
 from langchain.chat_models import init_chat_model
@@ -21,29 +27,55 @@ def insight_agent(
     load: Dict[str, Any],
     recovery: Dict[str, Any],
     risk: Dict[str, Any],
-    knowledge: Dict[str, Any] | None = None
+    knowledge: Dict[str, Any] | None = None,
+    graph_context: str | None = None
 ) -> Dict[str, Any]:
-    """
-    LLM-powered narrative agent.
-    Converts structured agent outputs into athlete-friendly insights.
-    """
 
-    user_content = {
-        "training_load_analysis": load,
-        "recovery_analysis": recovery,
-        "risk_assessment": risk,
-        "knowledge_context": knowledge
-    }
-
-    human_prompt = HumanMessage(
-        content=(
-            "Based ONLY on the following structured analysis, generate:\n"
-            "1. A detailed daily summary (5-6 sentences)\n"
-            "2. State all Key contributing factors (bullet points)\n"
-            "Structured analysis:\n"
-            f"{user_content}"
+    # ✅ HARD SAFETY: ensure graph context is never empty
+    if not graph_context or graph_context.strip() == "":
+        graph_context = (
+            "hrv_deviation indicates poor recovery; "
+            "sleep_debt reduces recovery; "
+            "rhr_deviation increases fatigue, which leads to injury risk; "
+            "acr_training_load increases injury risk"
         )
+
+    # FINAL PROMPT 
+    human_prompt = HumanMessage(
+    content=(
+        "You are analyzing athlete performance using BOTH data and graph relationships.\n\n"
+
+        "GUIDELINES:\n"
+        "1. First describe the athlete’s current state using the data\n"
+        "2. Then explain WHY using graph relationships\n"
+        "3. Use clear cause-effect statements (increases, reduces, leads to, indicates)\n"
+        "4. Combine relationships into logical chains where possible\n"
+        "5. Keep explanations concise and non-repetitive\n\n"
+
+        "STRICT RULES:\n"
+        "1. Do NOT introduce factors not present in data or graph\n"
+        "2. Do NOT reason from missing or absent data\n"
+        "3. Do NOT use speculative words (may, likely, possible)\n"
+        "4. Do NOT use meta phrases (not mentioned, no evidence, etc.)\n"
+        "5. Always use at least one graph relationship to explain risk\n\n"
+        "Only use graph relationships for metrics present in the athlete data"
+        "If a metric is not present, do NOT mention it"
+
+        "ATHLETE DATA:\n"
+        f"Training Load: {load}\n"
+        f"Recovery: {recovery}\n"
+        f"Risk: {risk}\n\n"
+
+        "GRAPH RELATIONSHIPS:\n"
+        f"{graph_context}\n\n"
+
+        "OUTPUT:\n"
+        "1. Detailed daily summary (5–6 sentences)\n"
+        "   - First 1–2 sentences: describe state from data\n"
+        "   - Remaining sentences: explain causes using graph\n"
+        "2. Key contributing factors (bullet points)\n"
     )
+)
 
     response = llm([SYSTEM_PROMPT, human_prompt])
 

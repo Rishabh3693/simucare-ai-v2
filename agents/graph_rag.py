@@ -1,4 +1,5 @@
 import os
+from matplotlib import lines
 from neo4j import GraphDatabase
 
 class GraphRAG:
@@ -12,38 +13,37 @@ class GraphRAG:
         self.driver.close()
 
     # ---- Map structured features → active metrics
-    def extract_active_metrics(self, data: dict):
+    def extract_active_metrics(self, data):
         active = []
 
-        # Load
-        if data.get("acr_training_load", 0) >= 1.5:
+    # ---- LOAD MAPPING ----
+        if data.get("load_status") in ["high_load", "overload"]:
             active.append("acr_training_load")
-        if data.get("acute_training_hours_7d", 0) > data.get("chronic_training_hours_28d", 0) * 1.2:
             active.append("acute_training_hours_7d")
 
-        # Recovery
-        if data.get("hrv_deviation", 0) < 0:
+        if data.get("load_status") == "recovery_dominant":
+            # still include for reasoning
+            active.append("chronic_training_hours_28d")
+
+        # ---- RECOVERY MAPPING ----
+        if data.get("recovery_status") in ["poor", "variable", "low"]:
+            active.append("sleep_debt")
             active.append("hrv_deviation")
-        if data.get("rhr_deviation", 0) > 0:
             active.append("rhr_deviation")
 
-        # Sleep
-        if data.get("sleep_debt", 0) > 1:
-            active.append("sleep_debt")
-        if data.get("total_sleep_hours", 8) < 6.5:
-            active.append("total_sleep_hours")
+        # ---- RISK MAPPING ----
+        if data.get("risk_level") in ["moderate", "high"]:
+            active.append("acr_training_load")
 
-        # Behavior
-        if data.get("hard_day", False):
+    # ---- BEHAVIOR (OPTIONAL) ----
+        if data.get("hard_day"):
             active.append("hard_day")
-        if data.get("multi_session_day", False):
-            active.append("multi_session_day")
-        if data.get("late_training_day", False):
-            active.append("late_training_day")
 
-        # Intensity
-        if data.get("total_suffer_score", 0) > 150:
-            active.append("total_suffer_score")
+        if data.get("multi_session_day"):
+            active.append("multi_session_day")
+
+        if data.get("late_training_day"):
+            active.append("late_training_day")
 
         return list(set(active))
 
@@ -65,6 +65,14 @@ class GraphRAG:
 
     # ---- Convert graph results → compact NL context
     def build_context(self, rows):
+        if not rows:
+            return (
+                "sleep_debt reduces recovery; "
+                "hrv_deviation indicates poor recovery; "
+                "rhr_deviation increases fatigue, which leads to injury risk; "
+                "acr_training_load increases injury risk"
+            )
+
         lines = []
         for r in rows:
             if r["cond2"]:
@@ -75,5 +83,5 @@ class GraphRAG:
                 lines.append(
                     f"{r['metric']} {r['rel1'].lower()} {r['cond1']}"
                 )
-        # Deduplicate + join
-        return "; ".join(sorted(set(lines)))
+
+        return "; ".join(set(lines))
