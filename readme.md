@@ -1,3 +1,4 @@
+<img width="728" height="256" alt="Image" src="https://github.com/user-attachments/assets/3186533c-5fd1-4075-bbf5-d55c1f4728e5" />
 # SimuCare — Agentic AI for Personalized Performance Optimization
 
 SimuCare is an athlete monitoring and simulation system that combines data preprocessing, state simulation, multi-agent analysis, graph-based reasoning, insight generation, and an interactive frontend. The current build uses a processed athlete-day table as its base dataset, a FastAPI backend for serving simulation results, LangGraph for orchestration, Groq-hosted LLMs for reasoning and dialogue, and Neo4j for graph-grounded causal relationships.
