@@ -68,26 +68,25 @@ def knowledge_node(state: AthleteState):
     }
 
 def graph_rag_node(state: AthleteState):
-    # Combine all structured outputs
+    tl = state.get("training_load_analysis", {})
+    rec = state.get("recovery_analysis", {})
+
     structured_data = {
-        **state.get("training_load_analysis", {}),
-        **state.get("recovery_analysis", {}),
-        **state.get("injury_risk_analysis", {})
+        "acr_training_load": tl.get("acr_training_load"),
+        "acute_training_hours_7d": tl.get("acute_training_hours_7d"),
+        "chronic_training_hours_28d": tl.get("chronic_training_hours_28d"),
+        "hrv_deviation": rec.get("hrv_deviation"),
+        "rhr_deviation": rec.get("rhr_deviation"),
+        "sleep_debt": rec.get("sleep_debt"),
     }
 
-    print("STRUCTURED DATA:", structured_data)  # 👈 Debug
-
-    # Step 1: Extract relevant metrics
     active_metrics = graph_rag.extract_active_metrics(structured_data)
-    print("ACTIVE METRICS:", active_metrics)    # 👈 Debug
-
-    # Step 2: Query Neo4j
     graph_results = graph_rag.query_graph(active_metrics)
-    print("GRAPH RESULTS:", graph_results)      # 👈 Debug
 
-    # Step 3: Build context
-    graph_context = graph_rag.build_context(graph_results)
-    print("GRAPH CONTEXT:", graph_context)      # 👈 Debug
+    if graph_results:
+        graph_context = graph_rag.build_context(graph_results)
+    else:
+        graph_context = "No strong causal relationships identified."
 
     return {
         "graph_context": graph_context
@@ -99,8 +98,10 @@ def insight_node(state: AthleteState):
         recovery=state["recovery_analysis"],
         risk=state["injury_risk_analysis"],
         knowledge=state.get("knowledge_context"),
-        graph_context=state.get("graph_context") 
+        graph_context=state.get("graph_context")
     )
+    print("INSIGHT INPUT:", state)
+    print("INSIGHT OUTPUT:", output)
     return {
         "insight_report": output,
         "confidence": output.get("confidence", 0.6)

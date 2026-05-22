@@ -14,38 +14,34 @@ class GraphRAG:
 
     # ---- Map structured features → active metrics
     def extract_active_metrics(self, data):
-        active = []
+        active = set()
 
-    # ---- LOAD MAPPING ----
+        # ---- ALWAYS INCLUDE CORE PHYSIOLOGY ----
+        active.update([
+            "acr_training_load",
+            "hrv_deviation",
+            "sleep_debt",
+            "rhr_deviation",
+            "chronic_training_hours_28d"
+        ])
+
+        # ---- LOAD SIGNALS ----
         if data.get("load_status") in ["high_load", "overload"]:
-            active.append("acr_training_load")
-            active.append("acute_training_hours_7d")
+            active.add("acute_training_hours_7d")
 
-        if data.get("load_status") == "recovery_dominant":
-            # still include for reasoning
-            active.append("chronic_training_hours_28d")
-
-        # ---- RECOVERY MAPPING ----
+        # ---- RECOVERY SIGNALS ----
         if data.get("recovery_status") in ["poor", "variable", "low"]:
-            active.append("sleep_debt")
-            active.append("hrv_deviation")
-            active.append("rhr_deviation")
+            active.update([
+                "sleep_debt",
+                "hrv_deviation",
+                "rhr_deviation"
+            ])
 
-        # ---- RISK MAPPING ----
+        # ---- RISK SIGNALS ----
         if data.get("risk_level") in ["moderate", "high"]:
-            active.append("acr_training_load")
+            active.add("acr_training_load")
 
-    # ---- BEHAVIOR (OPTIONAL) ----
-        if data.get("hard_day"):
-            active.append("hard_day")
-
-        if data.get("multi_session_day"):
-            active.append("multi_session_day")
-
-        if data.get("late_training_day"):
-            active.append("late_training_day")
-
-        return list(set(active))
+        return list(active)
 
     # ---- Query graph for relationships (1-hop + 2-hop)
     def query_graph(self, metrics):
@@ -65,23 +61,31 @@ class GraphRAG:
 
     # ---- Convert graph results → compact NL context
     def build_context(self, rows):
-        if not rows:
+        valid_rows = [
+            r for r in rows if r.get("rel1") and r.get("cond1")
+        ]
+
+        if not valid_rows:
             return (
-                "sleep_debt reduces recovery; "
-                "hrv_deviation indicates poor recovery; "
-                "rhr_deviation increases fatigue, which leads to injury risk; "
-                "acr_training_load increases injury risk"
+                "Sleep debt reduces recovery; "
+                "HRV deviation indicates poor recovery; "
+                "RHR deviation increases fatigue, which leads to injury risk; "
+                "ACR training load increases injury risk"
             )
 
         lines = []
-        for r in rows:
+        for r in valid_rows:
+            metric = r["metric"].replace("_", " ")
+            cond1 = r["cond1"]
+
             if r["cond2"]:
+                cond2 = r["cond2"]
                 lines.append(
-                    f"{r['metric']} {r['rel1'].lower()} {r['cond1']}, which {r['rel2'].lower()} {r['cond2']}"
+                    f"{metric} {r['rel1'].lower()} {cond1}, which {r['rel2'].lower()} {cond2}"
                 )
             else:
                 lines.append(
-                    f"{r['metric']} {r['rel1'].lower()} {r['cond1']}"
+                    f"{metric} {r['rel1'].lower()} {cond1}"
                 )
 
         return "; ".join(set(lines))

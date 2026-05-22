@@ -14,6 +14,7 @@ class AthleteState(TypedDict):
     recovery_analysis: Optional[Dict[str, Any]]
     injury_risk_analysis: Optional[Dict[str, Any]]
     knowledge_context: Optional[Dict[str, Any]]
+    graph_context: Optional[str]
 
     # Final output
     insight_report: Optional[Dict[str, Any]]

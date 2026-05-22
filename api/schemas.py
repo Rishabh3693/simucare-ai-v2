@@ -44,7 +44,27 @@ class AgentActionResponse(BaseModel):
     confidence: float
 
 
-class SimulationStepResponse(BaseModel):
-    updated_state: SimulationStateResponse
-    agent_actions: List[AgentActionResponse]
-    explanation: str
+class DialogueTurn(BaseModel):
+    role: str
+    text: str
+
+
+class InterruptionMeta(BaseModel):
+    interrupt: bool
+    who: Optional[str]
+    reason: Optional[str]
+
+
+class Dialogue(BaseModel):
+    conversation: List[DialogueTurn]
+    interruption_meta: InterruptionMeta
+
+
+class SimulationResponse(BaseModel):
+    updated_state: Dict[str, Any]
+    training_load: Dict[str, Any]
+    recovery: Dict[str, Any]
+    risk: Dict[str, Any]
+    insight: Dict[str, Any]
+    dialogue: Dialogue 
+     

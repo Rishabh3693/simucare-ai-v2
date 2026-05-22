@@ -49,11 +49,16 @@ class SimulationStepResult(TypedDict):
     explanation: str
 
 
-class SimulationGraphState(TypedDict):
-    simulation_state: SimulationState
-    agent_actions: List[AgentAction]
-    selected_action: AgentAction | None
-    explanation: str
-    message_bus: List[AgentMessage]
-    doctor_constraints: DoctorConstraint
-    negotiation_round: int
+class SimulationGraphState(TypedDict, total=False):
+    simulation_state: Dict[str, Any]
+
+    selected_features: Dict[str, Any]   # 🔥 REQUIRED
+    training_load_analysis: Dict[str, Any]
+    recovery_analysis: Dict[str, Any]
+    injury_risk_analysis: Dict[str, Any]
+
+    graph_context: str
+    insight_report: Dict[str, Any]
+    agent_dialogue: Dict[str, str]
+    history: List[Dict[str, Any]]
+    

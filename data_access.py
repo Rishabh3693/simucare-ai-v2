@@ -26,4 +26,19 @@ def load_athlete_day(user_id: str, day: str) -> dict:
     return row.iloc[0].to_dict()
 
 
+def load_athlete_window(user_id: str, start_day: str, days: int):
+    df = pd.read_csv(DATA_PATH, parse_dates=["day"], dayfirst=True)
+    df["day"] = df["day"].dt.normalize()
+
+    start = pd.to_datetime(start_day, dayfirst=True).normalize()
+    end = start + pd.Timedelta(days=days)
+
+    user_df = df[
+        (df["user_id"] == user_id) &
+        (df["day"] >= start) &
+        (df["day"] < end)
+    ].sort_values("day")
+
+    return user_df.reset_index(drop=True)
+
 #uvicorn api.main:app --reload

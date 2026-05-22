@@ -6,54 +6,20 @@ from typing import Dict, Any
 from langchain.schema import SystemMessage, HumanMessage
 from langchain.chat_models import init_chat_model
 
-from simulation.state import SimulationState, AgentAction
+from simulation.state import SimulationState
 
+# ----------------------------------------
+# LLM CONFIG
+# ----------------------------------------
 llm = init_chat_model(
     "llama-3.1-8b-instant",
     model_provider="groq",
-    temperature=0.45,
+    temperature=0.6,
 )
 
-MOTIVATION_PROMPT = SystemMessage(
-    content=(
-        "You simulate an endurance athlete's motivation."
-        " Return strict JSON with keys: motivation_level (0-1), risk_tolerance (0-1)."
-    )
-)
-
-ACTION_PREF_PROMPT = SystemMessage(
-    content=(
-        "You are the Athlete Action Preference Agent. "
-        "Your role is to represent the athlete’s voice in a collaborative discussion "
-        "with the coach and the doctor.\n\n"
-
-        "Before deciding, mentally consider:\n"
-        "- The athlete’s current physical condition and fatigue level.\n"
-        "- Recent training load and performance trends.\n"
-        "- Any medical concerns or recovery requirements from the doctor.\n"
-        "- The coach’s training goals and intensity expectations.\n"
-        "- The athlete’s motivation, confidence, and readiness.\n\n"
-
-        "Your decision should feel like a balanced outcome of a short internal dialogue:\n"
-        "- The coach pushes for performance and structured training.\n"
-        "- The doctor prioritizes health, recovery, and injury prevention.\n"
-        "- You, the athlete, choose a realistic and honest preference.\n\n"
-
-        "Based on this internal negotiation, output the athlete’s preferred training plan "
-        "for the day.\n\n"
-
-        "Return STRICT JSON only with these keys:\n"
-        "{\n"
-        "  desired_training_hours: float,\n"
-        "  desired_intensity: one of [low, moderate, high],\n"
-        "  decision_confidence: float between 0 and 1\n"
-        "}\n\n"
-
-        "Do not include explanations, text, or comments outside the JSON."
-    )
-)
-
-
+# ----------------------------------------
+# UTILS
+# ----------------------------------------
 def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
@@ -61,22 +27,19 @@ def _clamp(value: float, low: float, high: float) -> float:
 def _safe_json(payload: str, fallback: Dict[str, Any]) -> Dict[str, Any]:
     try:
         return json.loads(payload)
-    except json.JSONDecodeError:
+    except:
         return fallback
 
 
+# ----------------------------------------
+# MOTIVATION AGENT (LLM + fallback)
+# ----------------------------------------
 def _motivation_fallback(state: SimulationState) -> Dict[str, Any]:
-    risk_penalty = {
-        "very_high": 0.35,
-        "high": 0.25,
-        "moderate": 0.12,
-        "low": 0.0,
-    }.get(state["injury_risk"], 0.15)
+    fatigue = state.get("fatigue_level", 5)
+    sleep = state.get("sleep_hours", 7)
 
-    motivation = 0.72 - (state["fatigue_level"] / 20.0) + ((state["sleep_hours"] - 7.0) * 0.06)
-    motivation -= risk_penalty
-
-    risk_tolerance = 0.65 - risk_penalty - (0.05 if state["recovery_status"] in {"poor", "strained"} else 0.0)
+    motivation = 0.7 - (fatigue / 20.0) + ((sleep - 7) * 0.05)
+    risk_tolerance = 0.6 - (fatigue / 25.0)
 
     return {
         "motivation_level": round(_clamp(motivation, 0.05, 0.95), 2),
@@ -85,23 +48,32 @@ def _motivation_fallback(state: SimulationState) -> Dict[str, Any]:
 
 
 def motivation_agent(state: SimulationState) -> Dict[str, Any]:
-    human = HumanMessage(
+    prompt = HumanMessage(
         content=(
-            "Athlete state snapshot:\n"
-            f"training_hours={state['training_hours']}, "
-            f"fatigue_level={state['fatigue_level']}, "
-            f"recovery_status={state['recovery_status']}, "
-            f"injury_risk={state['injury_risk']}, "
-            f"risk_trend={state['risk_trend']}."
+            f"fatigue={state.get('fatigue_level')}, "
+            f"sleep={state.get('sleep_hours')}, "
+            f"risk={state.get('injury_risk')}"
         )
     )
-    response = llm([MOTIVATION_PROMPT, human])
+
+    system = SystemMessage(
+        content="""
+Simulate athlete motivation.
+Return JSON:
+{ motivation_level: float (0-1), risk_tolerance: float (0-1) }
+"""
+    )
+
+    response = llm([system, prompt])
     return _safe_json(response.content, _motivation_fallback(state))
 
 
+# ----------------------------------------
+# SELF PERCEPTION
+# ----------------------------------------
 def self_assessment_agent(state: SimulationState) -> Dict[str, Any]:
-    fatigue = state["fatigue_level"]
-    sleep = state["sleep_hours"]
+    fatigue = state.get("fatigue_level", 5)
+    sleep = state.get("sleep_hours", 7)
 
     if fatigue >= 7 or sleep < 6:
         perceived_fatigue = "high"
@@ -110,9 +82,11 @@ def self_assessment_agent(state: SimulationState) -> Dict[str, Any]:
     else:
         perceived_fatigue = "low"
 
-    if state["recovery_status"] in {"poor", "strained"}:
+    recovery_status = state.get("recovery_status")
+
+    if recovery_status in {"poor", "strained"}:
         perceived_recovery = "low"
-    elif state["recovery_status"] == "moderate":
+    elif recovery_status == "moderate":
         perceived_recovery = "moderate"
     else:
         perceived_recovery = "good"
@@ -123,93 +97,252 @@ def self_assessment_agent(state: SimulationState) -> Dict[str, Any]:
     }
 
 
-def action_preference_agent(
-    state: SimulationState,
-    motivation: Dict[str, Any],
-    self_assessment: Dict[str, Any],
-    doctor_constraints: Dict[str, Any],
-) -> Dict[str, Any]:
-    human = HumanMessage(
-        content=(
-            "Given the athlete inputs, propose desired training."
-            f"\nMotivation: {motivation}."
-            f"\nSelf-assessment: {self_assessment}."
-            f"\nCurrent training hours: {state['training_hours']}."
-            f"\nDoctor constraints: {doctor_constraints}."
-        )
-    )
-    response = llm([ACTION_PREF_PROMPT, human])
-
-    fallback_hours = max(0.0, state["training_hours"] * (0.85 if self_assessment["perceived_fatigue"] == "high" else 0.95))
-    fallback = {
-        "desired_training_hours": round(fallback_hours, 2),
-        "desired_intensity": "low" if self_assessment["perceived_fatigue"] == "high" else "moderate",
-        "decision_confidence": _clamp(0.45 + (state["confidence"] * 0.35), 0.3, 0.9),
+# ----------------------------------------
+# INTERNAL STATE (USED BY DIALOGUE)
+# ----------------------------------------
+def athlete_internal_state(state: SimulationState) -> Dict[str, Any]:
+    return {
+        "motivation": motivation_agent(state),
+        "perception": self_assessment_agent(state),
     }
 
-    parsed = _safe_json(response.content, fallback)
-    parsed["desired_training_hours"] = round(max(0.0, float(parsed.get("desired_training_hours", fallback["desired_training_hours"]))), 2)
-    if parsed.get("desired_intensity") not in {"low", "moderate", "high"}:
-        parsed["desired_intensity"] = fallback["desired_intensity"]
-    parsed["decision_confidence"] = round(
-        _clamp(float(parsed.get("decision_confidence", fallback["decision_confidence"])), 0.0, 1.0),
-        2,
-    )
-    return parsed
 
+# ----------------------------------------
+# 🔥 STRONG DATA CONTEXT BUILDER
+# ----------------------------------------
+def build_context_text(state, analysis, graph_context):
+    return f"""
+ATHLETE METRICS:
+- Training Hours: {state.get('training_hours')}
+- Sleep Hours: {state.get('sleep_hours')}
+- Fatigue Level: {state.get('fatigue_level')}
+- HRV Deviation: {state.get('hrv_deviation')}
+- RHR Deviation: {state.get('rhr_deviation')}
+- Sleep Debt: {state.get('sleep_debt')}
 
-def athlete_agent_system(
-    state: SimulationState,
-    doctor_constraints: dict | None = None,
-) -> AgentAction:
-    motivation = motivation_agent(state)
-    self_assessment = self_assessment_agent(state)
-    preference = action_preference_agent(
-        state,
-        motivation,
-        self_assessment,
-        doctor_constraints or {}
-    )
+ANALYSIS:
+- Load Status: {analysis['training_load'].get('load_status')}
+- Recovery Status: {analysis['recovery'].get('recovery_status')}
+- Risk Level: {analysis['risk'].get('risk_level')}
 
-    consistency_bonus = 0.08 if (
-        self_assessment["perceived_fatigue"] == "high" and preference["desired_training_hours"] <= state["training_hours"]
-    ) or (
-        self_assessment["perceived_fatigue"] == "low" and preference["desired_training_hours"] >= state["training_hours"] * 0.9
-    ) else 0.0
+GRAPH RELATIONSHIPS:
+{graph_context}
+"""
+# ----------------------------------------
+# MEMORY BUILDER 
+# ----------------------------------------
+def build_memory_text(history):
+    if not history:
+        return "No recent history."
 
-    computed_confidence = _clamp(
-        (0.4 * float(preference.get("decision_confidence", 0.5)))
-        + (0.3 * float(state["confidence"]))
-        + (0.2 * float(motivation.get("motivation_level", 0.5)))
-        + consistency_bonus,
-        0.25,
-        0.95,
-    )
+    lines = []
+    for i, day in enumerate(history[-3:]):
+        lines.append(
+            f"Day-{i+1}: fatigue={day.get('fatigue_level')}, "
+            f"recovery={day.get('recovery_status')}, "
+            f"risk={day.get('injury_risk')}"
+        )
 
-    reasoning = (
-        "Athlete preference based on motivation and perceived fatigue. "
-        f"Motivation={motivation.get('motivation_level')}, "
-        f"risk_tolerance={motivation.get('risk_tolerance')}, "
-        f"perceived_fatigue={self_assessment['perceived_fatigue']}."
-    )
+    return "\n".join(lines)
+# ----------------------------------------
+# MODERATOR AGENT (ADD THIS)
+# ----------------------------------------
+def moderator_agent(state, analysis, history):
+
+    memory_text = build_memory_text(history)
+
+    prompt = f"""
+Current:
+fatigue={state.get('fatigue_level')}
+risk={analysis['risk'].get('risk_level')}
+
+History:
+{memory_text}
+
+Decide if intervention is needed.
+
+Rules:
+- interrupt ONLY if trend or risk justifies
+- return JSON ONLY
+
+Output:
+{{
+  "interrupt": true/false,
+  "who": "coach" or "doctor",
+  "reason": "short reason"
+}}
+"""
+
+    try:
+        res = llm.invoke([
+            SystemMessage(content="You are a decision agent."),
+            HumanMessage(content=prompt)
+        ])
+
+        return json.loads(res.content)
+
+    except:
+        return {
+            "interrupt": False,
+            "who": None,
+            "reason": ""
+        }
+# ----------------------------------------
+# 🤖 MULTI-AGENT DIALOGUE (REAL AI)
+# ----------------------------------------
+def athlete_dialogue_agent(state, analysis, graph_context, history):
+
+    memory_text = build_memory_text(history)
+
+    base_context = f"""
+fatigue={state.get('fatigue_level')}
+sleep={state.get('sleep_hours')}
+load={analysis['training_load'].get('load_status')}
+recovery={analysis['recovery'].get('recovery_status')}
+risk={analysis['risk'].get('risk_level')}
+
+History:
+{memory_text}
+"""
+
+    # 🔥 STRICT RESPONSE FORMAT
+    SHORT_RULE = """
+RULES:
+- Speak in ONE short sentence
+- Max 15 words
+- No explanations
+- No metrics
+- Sound natural and human
+"""
+
+    def call_llm(messages, role):
+        try:
+            res = llm.invoke(messages)
+            text = (res.content or "").strip()
+
+            # 🔥 HARD TRIM SAFETY
+            if len(text.split()) > 20:
+                text = " ".join(text.split()[:20])
+
+            print(f"\n--- {role} TURN ---")
+            print("OUTPUT:", text)
+
+            if not text:
+                raise ValueError("Empty")
+
+            return text
+
+        except Exception as e:
+            print(f"{role} ERROR:", e)
+            return None
+
+    # ---------------- TURN 1: ATHLETE ----------------
+    athlete_msg = call_llm([
+        SystemMessage(content=f"""
+You are the athlete.
+{SHORT_RULE}
+Speak about how you feel.
+"""),
+        HumanMessage(content=base_context)
+    ], "ATHLETE")
+
+    # ---------------- TURN 2: COACH ----------------
+    coach_msg = call_llm([
+        SystemMessage(content=f"""
+You are the coach.
+{SHORT_RULE}
+Give training advice.
+"""),
+        HumanMessage(content=f"""
+Athlete: "{athlete_msg}"
+{base_context}
+""")
+    ], "COACH")
+
+    # ---------------- MODERATOR ----------------
+    decision = moderator_agent(state, analysis, history)
+
+    interruption = None
+
+    if decision["interrupt"]:
+
+        if decision["who"] == "doctor":
+            interruption = call_llm([
+                SystemMessage(content=f"""
+You are a doctor.
+{SHORT_RULE}
+Intervene clearly and firmly.
+"""),
+                HumanMessage(content=f"""
+Athlete: "{athlete_msg}"
+Coach: "{coach_msg}"
+Reason: {decision['reason']}
+""")
+            ], "DOCTOR INTERRUPTION")
+
+        elif decision["who"] == "coach":
+            interruption = call_llm([
+                SystemMessage(content=f"""
+You are a coach.
+{SHORT_RULE}
+Override the plan.
+"""),
+                HumanMessage(content=f"""
+Athlete: "{athlete_msg}"
+Reason: {decision['reason']}
+""")
+            ], "COACH INTERRUPTION")
+
+    # ---------------- TURN 3: DOCTOR ----------------
+    doctor_msg = call_llm([
+        SystemMessage(content=f"""
+You are the sports doctor.
+{SHORT_RULE}
+Give a risk statement.
+"""),
+        HumanMessage(content=f"""
+Athlete: "{athlete_msg}"
+Coach: "{coach_msg}"
+""")
+    ], "DOCTOR")
+
+    # ---------------- TURN 4: ATHLETE REPLY ----------------
+    athlete_reply = call_llm([
+        SystemMessage(content=f"""
+You are the athlete.
+{SHORT_RULE}
+Respond to coach and doctor.
+"""),
+        HumanMessage(content=f"""
+Coach: "{coach_msg}"
+Doctor: "{doctor_msg}"
+""")
+    ], "ATHLETE REPLY")
+
+    # ---------------- FINAL OUTPUT ----------------
+    conversation = [
+        {"role": "athlete", "text": athlete_msg or "I feel tired."},
+        {"role": "coach", "text": coach_msg or "Train lightly today."},
+    ]
+
+    if interruption:
+        conversation.append({
+            "role": decision["who"],
+            "text": interruption,
+            "type": "interruption"
+        })
+
+    conversation.append({
+        "role": "doctor",
+        "text": doctor_msg or "Be cautious today."
+    })
+
+    conversation.append({
+        "role": "athlete",
+        "text": athlete_reply or "Okay, I’ll take it easy."
+    })
 
     return {
-        "agent_system": "athlete",
-        "sub_agent": "action_preference",
-        "priority": 1,
-        "action_type": "training_preference",
-        "proposed_changes": {
-            "training_hours": preference.get("desired_training_hours"),
-            "desired_intensity": preference.get("desired_intensity"),
-            "athlete_state": {
-                "motivation_level": motivation.get("motivation_level"),
-                "risk_tolerance": motivation.get("risk_tolerance"),
-                "perceived_fatigue": self_assessment.get("perceived_fatigue"),
-                "perceived_recovery": self_assessment.get("perceived_recovery"),
-                "decision_confidence": preference.get("decision_confidence"),
-            },
-        },
-        "reasoning": reasoning,
-        "confidence": round(computed_confidence, 2),
+        "conversation": conversation,
+        "interruption_meta": decision
     }
-

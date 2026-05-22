@@ -3,7 +3,8 @@ from api.schemas import (
     InsightResponse,
     ChatRequest,
     ChatResponse,
-    SimulationStepResponse,
+    SimulationResponse,
+    SimulationResponse,
 )
 
 from data_access import load_athlete_day
@@ -155,7 +156,7 @@ def monthly_summary(user_id: str, end_day: str):
     }
 
 
-@app.get("/user/{user_id}/simulate-day", response_model=SimulationStepResponse)
+@app.get("/user/{user_id}/simulate-day", response_model=SimulationResponse)
 def simulate_day(user_id: str, day: str):
     try:
         return run_simulation_step(user_id, day)
